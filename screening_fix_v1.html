@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <title>Pump Scanner — Indodax IDR (Debug Version)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Pemantau pump sederhana berdasarkan % perubahan 24 jam di Indodax IDR" />
+  <style>
+    :root{
+      --bg:#071017; --card:#0f1720; --fg:#e6eef6; --muted:#93a7b7;
+      --green:#00d658; --red:#ff6b6b; --amber:#ffc947; --border:#21313f;
+      --glass: rgba(255,255,255,0.03);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui, -apple-system,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,var(--bg),#041019);color:var(--fg)}
+    header{position:sticky;top:0;background:var(--card);backdrop-filter:blur(6px);padding:14px 18px;border-bottom:1px solid var(--border);z-index:20}
+    h1{margin:0;font-size:18px}
+    .desc{color:var(--muted);font-size:12px;margin-top:6px}
+    .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:10px}
+    .controls label{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center}
+    input[type=number], input[type=text], select{background:var(--glass);border:1px solid var(--border);padding:6px 8px;border-radius:8px;color:var(--fg);font-size:13px}
+    button{background:#0ea5a4;border:0;padding:8px 10px;border-radius:8px;color:#001;cursor:pointer;font-weight:600}
+    button.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+    main{padding:16px}
+    .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-radius:10px;padding:12px;border:1px solid var(--border)}
+    table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px}
+    thead th{position:sticky;top:84px;background:var(--card);text-align:left;padding:10px;border-bottom:1px solid var(--border);color:var(--amber)}
+    tbody td{padding:10px;border-bottom:1px solid var(--border)}
+    tbody tr:nth-child(odd){background:rgba(255,255,255,0.012)}
+    .pos{color:var(--green);font-weight:700}
+    .neg{color:var(--red);font-weight:700}
+    .small{font-size:12px;color:var(--muted)}
+    .flex{display:flex;gap:10px;align-items:center}
+    .badge{padding:4px 8px;border-radius:999px;background:rgba(255,255,255,0.02);border:1px solid var(--border);font-size:12px;color:var(--muted)}
+    .alert-badge{background:rgba(255,201,71,0.15);border-color:var(--amber);color:var(--amber)}
+    footer{padding:12px 16px;color:var(--muted);font-size:13px}
+    .loading{animation:pulse 1.5s infinite}
+    @keyframes pulse{0%{opacity:0.6}50%{opacity:1}100%{opacity:0.6}}
+    .status-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+    .status-running{background:var(--green)}
+    .status-stopped{background:var(--muted)}
+    .status-error{background:var(--red)}
+    .pump-badge{background:rgba(255,107,107,0.15);border-color:var(--red);color:var(--red)}
+    .dump-badge{background:rgba(0,214,88,0.15);border-color:var(--green);color:var(--green)}
+    .debug-console{background:rgba(0,0,0,0.5);border:1px solid var(--border);border-radius:8px;padding:10px;margin-top:10px;max-height:200px;overflow-y:auto;font-family:monospace;font-size:11px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PEMANTAU PERUBAHAN 24 JAM — Indodax IDR (Debug Mode)</h1>
+    <div class="desc">Menampilkan semua pair berdasarkan persentase perubahan 24 jam terakhir. Sorting dari % terbesar.</div>
+    <div class="controls">
+      <label>Min % Perubahan: 
+        <input id="minChange" type="number" value="0.1" min="0.1" max="100" step="0.1" />
+      </label>
+      <label>Jenis: 
+        <select id="changeType">
+          <option value="all">Semua</option>
+          <option value="positive">Naik (+) Saja</option>
+          <option value="negative">Turun (-) Saja</option>
+        </select>
+      </label>
+      <label>Min Volume IDR: 
+        <input id="minVolume" type="number" value="0" min="0" step="1000000" />
+      </label>
+      <label>Refresh (detik): 
+        <input id="refreshSec" type="number" value="30" min="5" max="120" />
+      </label>
+      <label><input id="debugMode" type="checkbox" checked /> Debug Mode</label>
+      <div class="flex">
+        <button id="runBtn">▶ Mulai</button>
+        <button id="stopBtn" class="ghost">⏹ Henti</button>
+        <button id="testBtn" class="ghost">🧪 Test API</button>
+      </div>
+      <div style="margin-left:auto" class="small">
+        <span class="status-indicator" id="statusLed"></span>
+        <span id="status">Siap</span>
+        <span id="counter" style="margin-left:10px"></span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="panel">
+      <div class="small">
+        <span class="badge" id="statsPairs">Total Pair: 0</span>
+        <span class="badge" id="statsFiltered">Ditampilkan: 0</span>
+        <span class="badge pump-badge" id="statsPump">Naik: 0</span>
+        <span class="badge dump-badge" id="statsDump">Turun: 0</span>
+      </div>
+      
+      <div class="debug-console" id="debugConsole" style="display:none">
+        <div>Debug Console:</div>
+        <div id="debugLog"></div>
+      </div>
+
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>Waktu</th>
+            <th>Pair</th>
+            <th>Harga Terakhir</th>
+            <th>Harga IDR</th>
+            <th>Perubahan 24h</th>
+            <th>Volume 24h</th>
+            <th>Tertinggi 24h</th>
+            <th>Terendah 24h</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--muted)">Menunggu data...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <footer>
+    Sumber API: Indodax Public REST. Data diurutkan berdasarkan persentase perubahan 24 jam tertinggi.
+    Warna hijau = naik, merah = turun. Volume dalam IDR.
+  </footer>
+
+  <script>
+  (function(){
+    // ---------- CONFIG ----------
+    const CONFIG = {
+      base: 'https://indodax.com',
+      defaultRefresh: 30,
+      fetchTimeout: 10_000,
+      maxRetries: 2,
+      debug: true
+    };
+
+    // ---------- state ----------
+    let running = false;
+    let loopTimer = null;
+    let cycleCount = 0;
+
+    // ---------- DOM elements ----------
+    const qs = s => document.querySelector(s);
+    const debugLog = [];
+    
+    // Debug logging function
+    function logDebug(message, data = null) {
+      const timestamp = new Date().toLocaleTimeString('id-ID');
+      const logEntry = `[${timestamp}] ${message}`;
+      debugLog.push(logEntry);
+      
+      if (data !== null) {
+        debugLog.push(JSON.stringify(data, null, 2));
+      }
+      
+      // Keep only last 20 entries
+      if (debugLog.length > 20) {
+        debugLog.splice(0, debugLog.length - 20);
+      }
+      
+      // Update debug console if visible
+      const debugConsole = qs('#debugConsole');
+      const debugLogEl = qs('#debugLog');
+      if (debugConsole.style.display !== 'none' && debugLogEl) {
+        debugLogEl.innerHTML = debugLog.join('<br>');
+        debugConsole.scrollTop = debugConsole.scrollHeight;
+      }
+      
+      console.log(message, data || '');
+    }
+    
+    // UI update helpers
+    function updateStatus(text, type = 'info') {
+      const statusEl = qs('#status');
+      const ledEl = qs('#statusLed');
+      statusEl.textContent = text;
+      ledEl.className = 'status-indicator';
+      
+      if (type === 'running') {
+        ledEl.classList.add('status-running');
+        statusEl.classList.add('loading');
+      } else if (type === 'error') {
+        ledEl.classList.add('status-error');
+        statusEl.classList.remove('loading');
+      } else {
+        ledEl.classList.add('status-stopped');
+        statusEl.classList.remove('loading');
+      }
+      
+      logDebug(`Status: ${text}`);
+    }
+    
+    function updateStats(total = 0, filtered = 0, pump = 0, dump = 0) {
+      qs('#statsPairs').textContent = `Total Pair: ${total}`;
+      qs('#statsFiltered').textContent = `Ditampilkan: ${filtered}`;
+      qs('#statsPump').textContent = `Naik: ${pump}`;
+      qs('#statsDump').textContent = `Turun: ${dump}`;
+      qs('#counter').textContent = `Update: ${cycleCount}`;
+      
+      logDebug(`Stats - Total: ${total}, Filtered: ${filtered}, Pump: ${pump}, Dump: ${dump}`);
+    }
+
+    // ---------- settings ----------
+    const saveSettings = () =>{
+      localStorage.setItem('simple_pump_settings', JSON.stringify({
+        minChange: qs('#minChange').value,
+        changeType: qs('#changeType').value,
+        minVolume: qs('#minVolume').value,
+        refreshSec: qs('#refreshSec').value,
+        debugMode: qs('#debugMode').checked
+      }));
+    };
+    
+    const loadSettings = ()=>{
+      try{
+        const s = JSON.parse(localStorage.getItem('simple_pump_settings')||'{}');
+        if(s.minChange) qs('#minChange').value = s.minChange;
+        if(s.changeType) qs('#changeType').value = s.changeType;
+        if(s.minVolume) qs('#minVolume').value = s.minVolume;
+        if(s.refreshSec) qs('#refreshSec').value = s.refreshSec;
+        if(s.debugMode !== undefined) {
+          qs('#debugMode').checked = s.debugMode;
+          qs('#debugConsole').style.display = s.debugMode ? 'block' : 'none';
+        }
+      }catch(e){
+        console.warn('Gagal load settings:', e);
+      }
+    };
+    
+    loadSettings();
+    
+    // Toggle debug console
+    qs('#debugMode').addEventListener('change', function() {
+      qs('#debugConsole').style.display = this.checked ? 'block' : 'none';
+      saveSettings();
+    });
+
+    // ---------- util ----------
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const nowTs = () => new Date().toLocaleTimeString('id-ID', {hour12: false});
+    const fmtNum = (v, d = 8) => (v===null||v===undefined||isNaN(v))?'-':Number(v).toFixed(d);
+    const fmtPct = (v, d = 2, sign = true) => {
+      if(v===null||v===undefined||isNaN(v)) return '-';
+      const s = Number(v);
+      return (sign && s >= 0 ? '+' : '') + s.toFixed(d) + '%';
+    };
+    const fmtAbbrev = n => {
+      const v = Number(n || 0);
+      const a = Math.abs(v);
+      if(a >= 1e9) return (v/1e9).toFixed(2) + 'B';
+      if(a >= 1e6) return (v/1e6).toFixed(2) + 'M';
+      if(a >= 1e3) return (v/1e3).toFixed(2) + 'K';
+      return v.toFixed(2);
+    };
+    const fmtIDR = n => 'Rp' + Number(n||0).toLocaleString('id-ID');
+
+    // ---------- fetch with retry and timeout ----------
+    async function limitedFetch(url, opts = {}){
+      logDebug(`Fetching: ${url}`);
+      let attempt = 0;
+      while(attempt <= CONFIG.maxRetries){
+        attempt++;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), CONFIG.fetchTimeout);
+        
+        try{
+          const r = await fetch(url, {
+            ...opts,
+            signal: controller.signal,
+            cache: 'no-store',
+            mode: 'cors',
+            headers: {
+              'Accept': 'application/json',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if(!r.ok){
+            const txt = await r.text().catch(() => r.statusText);
+            throw new Error(`HTTP ${r.status}: ${txt.slice(0,100)}`);
+          }
+          
+          const data = await r.json();
+          logDebug(`Fetch success: ${url}`, {status: r.status, size: JSON.stringify(data).length});
+          return data;
+          
+        }catch(err){
+          clearTimeout(timeoutId);
+          logDebug(`Fetch attempt ${attempt} failed: ${err.message}`);
+          
+          if(attempt > CONFIG.maxRetries){
+            throw err;
+          }
+          
+          await sleep(200 * Math.pow(2, attempt));
+        }
+      }
+    }
+
+    // ---------- API helpers ----------
+    async function apiPairs(){
+      try{
+        const url = `${CONFIG.base}/api/pairs`;
+        logDebug('Calling API: /api/pairs');
+        const data = await limitedFetch(url);
+        
+        logDebug('Pairs API response structure:', {
+          isArray: Array.isArray(data),
+          length: Array.isArray(data) ? data.length : 'not array',
+          firstItem: Array.isArray(data) && data.length > 0 ? data[0] : 'none'
+        });
+        
+        return Array.isArray(data) ? data : [];
+      }catch(err){
+        logDebug('Error fetching pairs:', err.message);
+        console.error('Gagal mengambil pairs:', err);
+        return [];
+      }
+    }
+    
+    async function apiSummaries(){
+      try{
+        const url = `${CONFIG.base}/api/summaries`;
+        logDebug('Calling API: /api/summaries');
+        const data = await limitedFetch(url);
+        
+        logDebug('Summaries API response keys:', Object.keys(data || {}));
+        logDebug('Tickers sample:', data && data.tickers ? {
+          count: Object.keys(data.tickers).length,
+          firstKey: Object.keys(data.tickers)[0],
+          firstValue: data.tickers[Object.keys(data.tickers)[0]]
+        } : 'no tickers');
+        
+        return data || {};
+      }catch(err){
+        logDebug('Error fetching summaries:', err.message);
+        console.error('Gagal mengambil summaries:', err);
+        return {};
+      }
+    }
+
+    // ---------- compute 24h change ----------
+    function compute24hChange(tickerData){
+      if (!tickerData) return 0;
+      
+      const last = Number(tickerData.last || 0);
+      const open = Number(tickerData.open || 0);
+      
+      // If open is 0 or not available, try to calculate from high/low or use last
+      if (open > 0) {
+        return ((last - open) / open * 100.0);
+      }
+      
+      // Alternative calculation if open not available
+      const high = Number(tickerData.high || 0);
+      const low = Number(tickerData.low || 0);
+      const avg = (high + low) / 2;
+      
+      if (avg > 0) {
+        return ((last - avg) / avg * 100.0);
+      }
+      
+      return 0;
+    }
+
+    // ---------- render table ----------
+    function renderRows(rowsData){
+      const tbody = qs('#rows');
+      
+      if(!rowsData || rowsData.length === 0){
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="9" style="text-align:center;padding:30px;color:var(--muted)">
+              Tidak ada data yang memenuhi filter.<br>
+              <small>Coba kurangi min % perubahan atau min volume</small>
+            </td>
+          </tr>
+        `;
+        logDebug('No rows to display after filtering');
+        return;
+      }
+      
+      logDebug(`Rendering ${rowsData.length} rows`);
+      
+      let html = '';
+      for(const r of rowsData){
+        const time = nowTs();
+        const pair = r.pair.replace('_idr', '').toUpperCase();
+        const priceIDR = fmtIDR(r.lastPrice);
+        const changeClass = r.change24h >= 0 ? 'pos' : 'neg';
+        const badgeClass = r.change24h >= 0 ? 'pump-badge' : 'dump-badge';
+        const badgeText = r.change24h >= 0 ? `📈 +${Math.abs(r.change24h).toFixed(2)}%` : `📉 -${Math.abs(r.change24h).toFixed(2)}%`;
+        
+        html += `
+          <tr>
+            <td>${time}</td>
+            <td><strong>${pair}</strong></td>
+            <td>${fmtNum(r.lastPrice)}</td>
+            <td>${priceIDR}</td>
+            <td class="${changeClass}"><strong>${fmtPct(r.change24h)}</strong></td>
+            <td>${fmtAbbrev(r.volume24h)}</td>
+            <td>${fmtNum(r.high24h)}</td>
+            <td>${fmtNum(r.low24h)}</td>
+            <td><span class="badge ${badgeClass}">${badgeText}</span></td>
+          </tr>
+        `;
+      }
+      
+      tbody.innerHTML = html;
+      logDebug('Table rendered successfully');
+    }
+
+    // ---------- main loop ----------
+    async function loopOnce(){
+      if(!running) return;
+      
+      cycleCount++;
+      logDebug(`=== Starting cycle ${cycleCount} ===`);
+      updateStatus('Mengambil data...', 'running');
+      
+      try{
+        // Get all data
+        logDebug('Fetching API data...');
+        const [pairsData, summaries] = await Promise.all([
+          apiPairs(),
+          apiSummaries()
+        ]);
+        
+        logDebug('Processing data...');
+        const tickers = summaries.tickers || {};
+        
+        // Debug: show first few tickers
+        const tickerKeys = Object.keys(tickers);
+        logDebug(`Found ${tickerKeys.length} tickers in summaries`);
+        if (tickerKeys.length > 0) {
+          const sampleKey = tickerKeys.find(k => k.includes('idr')) || tickerKeys[0];
+          logDebug(`Sample ticker (${sampleKey}):`, tickers[sampleKey]);
+        }
+        
+        // Get IDR pairs
+        const idrPairs = pairsData
+          .filter(p => (p.ticker_id || '').endsWith('_idr'))
+          .map(p => p.ticker_id);
+        
+        logDebug(`Found ${idrPairs.length} IDR pairs, first 3:`, idrPairs.slice(0, 3));
+        
+        // Process each pair
+        const rows = [];
+        let pumpCount = 0;
+        let dumpCount = 0;
+        
+        const minChange = parseFloat(qs('#minChange').value) || 0.1;
+        const minVolume = parseFloat(qs('#minVolume').value) || 0;
+        const changeType = qs('#changeType').value;
+        
+        logDebug(`Filters - Min Change: ${minChange}%, Min Volume: ${minVolume}, Type: ${changeType}`);
+        
+        for(const pid of idrPairs){
+          const tinfo = tickers[pid];
+          if (!tinfo) {
+            logDebug(`No ticker data for ${pid}`);
+            continue;
+          }
+          
+          const lastPrice = Number(tinfo.last || 0);
+          const volume24h = Number(tinfo.vol_idr || 0);
+          const change24h = compute24hChange(tinfo);
+          const high24h = Number(tinfo.high || 0);
+          const low24h = Number(tinfo.low || 0);
+          
+          // Debug log for first few pairs
+          if (rows.length < 3) {
+            logDebug(`Processing ${pid}:`, {
+              lastPrice,
+              volume24h,
+              change24h,
+              high24h,
+              low24h
+            });
+          }
+          
+          // Apply filters
+          const absChange = Math.abs(change24h);
+          if(absChange < minChange) continue;
+          if(volume24h < minVolume) continue;
+          
+          // Check change type filter
+          if(changeType === 'positive' && change24h <= 0) continue;
+          if(changeType === 'negative' && change24h >= 0) continue;
+          
+          // Count pump/dump
+          if(change24h > 0) pumpCount++;
+          if(change24h < 0) dumpCount++;
+          
+          rows.push({
+            pair: pid,
+            lastPrice,
+            change24h,
+            volume24h,
+            high24h,
+            low24h
+          });
+        }
+        
+        // Sort by absolute change (highest first)
+        rows.sort((a, b) => Math.abs(b.change24h) - Math.abs(a.change24h));
+        
+        logDebug(`Filtered to ${rows.length} rows after applying filters`);
+        
+        // Update UI
+        renderRows(rows);
+        updateStats(idrPairs.length, rows.length, pumpCount, dumpCount);
+        updateStatus(`Siap - ${rows.length} pair ditampilkan`, 'info');
+        
+      }catch(err){
+        logDebug('Loop error:', err.message);
+        console.error('Loop error:', err);
+        updateStatus(`Error: ${err.message}`, 'error');
+      }
+    }
+
+    // ---------- control functions ----------
+    function start(){
+      if(running) return;
+      
+      saveSettings();
+      running = true;
+      cycleCount = 0;
+      
+      updateStatus('Memulai...', 'running');
+      logDebug('Scanner started');
+      
+      // Run first loop immediately
+      loopOnce();
+      
+      // Set interval for subsequent loops
+      const refreshSec = Math.max(5, Number(qs('#refreshSec').value || CONFIG.defaultRefresh));
+      if(loopTimer) clearInterval(loopTimer);
+      loopTimer = setInterval(loopOnce, refreshSec * 1000);
+      
+      console.log('Scanner started with interval:', refreshSec, 'seconds');
+    }
+    
+    function stop(){
+      if(!running) return;
+      
+      running = false;
+      if(loopTimer){
+        clearInterval(loopTimer);
+        loopTimer = null;
+      }
+      
+      updateStatus('Dihentikan', 'info');
+      logDebug('Scanner stopped');
+      console.log('Scanner stopped');
+    }
+    
+    async function testAPI(){
+      updateStatus('Testing API...', 'running');
+      logDebug('Testing API connection...');
+      
+      try{
+        const testUrl = `${CONFIG.base}/api/pairs`;
+        logDebug(`Testing: ${testUrl}`);
+        
+        const response = await fetch(testUrl, {
+          mode: 'cors',
+          headers: {
+            'Accept': 'application/json'
+          }
+        });
+        
+        if(response.ok){
+          const data = await response.json();
+          logDebug('API Test successful', {
+            status: response.status,
+            contentType: response.headers.get('content-type'),
+            dataLength: Array.isArray(data) ? data.length : 'not array'
+          });
+          
+          alert(`✅ API Access OK\nStatus: ${response.status}\nData: ${Array.isArray(data) ? data.length + ' pairs' : 'received'}`);
+        } else {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      }catch(err){
+        logDebug('API Test failed:', err.message);
+        console.error('Test failed:', err);
+        alert(`❌ Test gagal: ${err.message}\n\nCoba buka DevTools (F12) dan lihat tab Network untuk detail error.`);
+      }
+      
+      updateStatus('Siap', 'info');
+    }
+
+    // ---------- bind UI ----------
+    qs('#runBtn').addEventListener('click', start);
+    qs('#stopBtn').addEventListener('click', stop);
+    qs('#testBtn').addEventListener('click', testAPI);
+    
+    // Auto-save settings when changed
+    const inputs = ['#minChange', '#changeType', '#minVolume', '#refreshSec'];
+    inputs.forEach(selector => {
+      qs(selector).addEventListener('change', saveSettings);
+    });
+    
+    // Auto-start if settings exist
+    window.addEventListener('load', () => {
+      updateStatus('Siap', 'info');
+      updateStats(0, 0, 0, 0);
+      
+      logDebug('Page loaded');
+      
+      // Auto-start after 1 second
+      setTimeout(() => {
+        if(localStorage.getItem('simple_pump_settings')){
+          logDebug('Auto-starting from saved settings...');
+          start();
+        }
+      }, 1000);
+    });
+
+    // ---------- expose for debugging ----------
+    window._debug = {
+      start,
+      stop,
+      testAPI,
+      logDebug,
+      getState: () => ({ running, cycleCount })
+    };
+
+  })();
+  </script>
+</body>
+</html>
